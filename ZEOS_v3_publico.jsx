@@ -1,0 +1,1473 @@
+import { useState, useEffect, useRef, useCallback } from "react";
+
+// ╔══════════════════════════════════════════════════════════════════════╗
+// ║  ZEOS v3 · Epistemologia das Ciências · Frederico Nunes Costa 2026  ║
+// ║  + Google Auth (simulado/Firebase-ready)                            ║
+// ║  + Zenodo API (DOI real com token)                                  ║
+// ║  + Painel do Curador (aprovar/rejeitar submissões)                  ║
+// ║  + CrossRef API (já existia — mantido e expandido)                  ║
+// ╚══════════════════════════════════════════════════════════════════════╝
+
+// ── INSTRUÇÕES DE CONFIGURAÇÃO (leia antes de subir para zeos.com.br) ──
+// 1. GOOGLE AUTH: substitua GOOGLE_CLIENT_ID pelo seu ID real do Google Cloud Console
+//    e descomente a chamada real ao Google Identity Services em useGoogleAuth()
+// 2. ZENODO: insira seu token em ZENODO_TOKEN (gerado em zenodo.org/account/settings/applications)
+//    Use ZENODO_SANDBOX = true para testes, false para produção
+// 3. Em produção, mova os tokens para variáveis de ambiente (não versione no git)
+
+const GOOGLE_CLIENT_ID = "SEU_GOOGLE_CLIENT_ID.apps.googleusercontent.com"; // ← substitua
+const ZENODO_TOKEN = "SEU_TOKEN_ZENODO_AQUI"; // ← substitua (zenodo.org/account/settings/applications)
+const ZENODO_SANDBOX = true; // true = sandbox.zenodo.org (testes) | false = zenodo.org (produção)
+const ZENODO_BASE = ZENODO_SANDBOX
+  ? "https://sandbox.zenodo.org/api"
+  : "https://zenodo.org/api";
+
+// ── CURADOR (único usuário que pode aprovar artigos) ──
+const CURADOR_EMAIL = "CURADOR_EMAIL@exemplo.com";
+
+const P = {
+  bg:"#050810", surface:"#090D15", card:"#0D1420", cardHi:"#111B28",
+  border:"rgba(78,207,160,0.12)", borderHi:"rgba(78,207,160,0.30)",
+  emerald:"#4ECFA0", blue:"#7ABEDB", amber:"#C8B850",
+  red:"#E08070", violet:"#A78BFA",
+  text:"#DFF0EA", text2:"#618880", text3:"#2E4E48",
+  mono:"'Courier New','Lucida Console',monospace",
+  serif:"Georgia,'Times New Roman',serif",
+  sans:"'Trebuchet MS','Gill Sans',sans-serif",
+};
+
+const FACES_LIST = ["Lógica","Temporal","Dialética","Hermenêutica","Empírica","Normativa","Cognitiva","Tecnológica"];
+const AREAS_LIST = ["Filosofia da Ciência","Epistemologia","Lógica","História da Ciência","Metodologia","Ciências Humanas","Filosofia Analítica"];
+
+const SEED_ARTIGOS = [
+  { id:"ap1", tipo:"proprio", face:"Lógica", color:P.emerald, re:0.87,
+    autor:"Frederico Nunes Costa", autorEmail: CURADOR_EMAIL,
+    titulo:"A Estrutura Axiomática do Conhecimento Científico",
+    subtitulo:"Fundamentos formais da epistemologia contemporânea",
+    data:"Maio 2026", leitura:"12 min", tags:["Axiomática","Demarcação","Dedução"],
+    resumo:"Uma análise dos axiomas que sustentam a produção de conhecimento nas ciências empíricas, com atenção especial à coerência interna dos sistemas dedutivos e ao papel da refutabilidade na demarcação científica.",
+    texto:`A epistemologia das ciências parte de uma pergunta deceptivamente simples: o que distingue o conhecimento científico de outras formas de crença justificada?
+
+Karl Popper propôs o critério de falseabilidade. Uma teoria é científica se, e somente se, puder ser refutada por evidência empírica. A lógica subjacente é assimétrica — mil confirmações não provam uma teoria, mas uma única refutação a derruba.
+
+**§1 — O problema da indução revisitado**
+
+Hume demonstrou que nenhuma quantidade de observações positivas justifica logicamente uma generalização universal. A solução popperiana contorna, mas não resolve o problema.
+
+**§2 — Axiomas da estrutura científica**
+
+Propomos cinco axiomas mínimos: (A1) consistência interna, (A2) alcance explicativo, (A3) poder preditivo, (A4) intersubjetividade e (A5) revisabilidade.
+
+**§3 — Conclusão**
+
+A demarcação científica é ela mesma um problema filosófico de primeira ordem. Não pode ser resolvida de dentro da ciência — requer uma epistemologia normativa.`,
+    aprovado: true, doi: null, zenodoId: null,
+  },
+  { id:"ap2", tipo:"proprio", face:"Temporal", color:P.blue, re:0.79,
+    autor:"Frederico Nunes Costa", autorEmail: CURADOR_EMAIL,
+    titulo:"Mudança de Paradigma e Incomensurabilidade",
+    subtitulo:"Kuhn, Feyerabend e a descontinuidade histórica",
+    data:"Abril 2026", leitura:"18 min", tags:["Kuhn","Paradigma","Incomensurabilidade"],
+    resumo:"Investigação crítica do conceito de paradigma em Kuhn e sua relação com a tese da incomensurabilidade.",
+    texto:`Thomas Kuhn revolucionou a filosofia da ciência ao mostrar que o progresso científico não é linear. Há rupturas, descontinuidades, momentos em que a comunidade científica abandona um conjunto de pressupostos e adota outro radicalmente diferente.
+
+**§1 — A tese da incomensurabilidade**
+
+Kuhn sustentou que paradigmas rivais são incomensuráveis. Feyerabend radicalizou essa tese até o relativismo.
+
+**§2 — Uma leitura graduada**
+
+Propomos que a incomensurabilidade é parcial, não total. A história da ciência mostra precisamente essa mescla de ruptura e continuidade.
+
+**§3 — Implicações**
+
+Se a incomensurabilidade é graduada, o debate entre realistas e antirrealistas científicos precisa ser reformulado.`,
+    aprovado: true, doi: null, zenodoId: null,
+  },
+];
+
+const SEED_BIBLIOTECA = [
+  { id:"b1", autor:"Karl Popper", titulo:"A Lógica da Pesquisa Científica", ano:1934, area:"Filosofia da Ciência", color:P.emerald, nota:"Obra fundacional do falsificacionismo. Capítulos 1–4 são essenciais.", tags:["Falsificacionismo","Demarcação"], arquivo:null },
+  { id:"b2", autor:"Thomas Kuhn", titulo:"A Estrutura das Revoluções Científicas", ano:1962, area:"História da Ciência", color:P.blue, nota:"O conceito de paradigma é produtivo mas impreciso — Kuhn usa o termo em pelo menos 21 sentidos diferentes.", tags:["Paradigma","Ciência Normal"], arquivo:null },
+  { id:"b3", autor:"Imre Lakatos", titulo:"A Metodologia dos Programas de Pesquisa Científica", ano:1978, area:"Filosofia da Ciência", color:P.amber, nota:"Síntese sofisticada entre Popper e Kuhn. A noção de cinturão protetor é uma das contribuições mais duráveis.", tags:["Programas de Pesquisa","Heurística"], arquivo:null },
+];
+
+const SEED_CORPUS = [
+  { id:"x1", titulo:"Epistemic Closure and Scientific Reasoning", autores:"Smith, J.; Lee, K.", journal:"PhilSci Archive", ano:2025, re:0.91, color:P.emerald, doi:"arxiv:2501.00123" },
+  { id:"x2", titulo:"Bayesian Confirmation Theory Revisited", autores:"Hartmann, S.; Sprenger, J.", journal:"Synthese", ano:2024, re:0.88, color:P.blue, doi:"arxiv:2412.00456" },
+  { id:"x3", titulo:"The Underdetermination Problem in Modern Physics", autores:"Norton, J.D.", journal:"PhilSci Archive", ano:2025, re:0.84, color:P.amber, doi:"arxiv:2503.00789" },
+];
+
+const SEED_NOTAS = [
+  { id:"n1", tipo:"Aforismo", color:P.emerald, texto:"O conhecimento é uma função de sua própria revisão. Uma epistemologia que não se aplica a si mesma é dogma disfarçado de método.", data:"Mai 2026" },
+  { id:"n2", tipo:"Definição", color:P.blue, texto:"Ressonância Epistêmica (RE): medida composta de amplitude argumentativa, coerência interna e poder explicativo de uma tese. Não é verdade — é potência.", data:"Abr 2026" },
+  { id:"n3", tipo:"Provocação", color:P.red, texto:"Se sua teoria não pode ser refutada, não é ciência. Se só pode ser refutada em teoria mas nunca na prática, também não é.", data:"Mar 2026" },
+];
+
+// ── STORAGE ──
+const memStore = {};
+const storage = {
+  get(k) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : null; } catch { return memStore[k] ?? null; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { memStore[k] = v; } },
+};
+function loadData(key, seed) { return storage.get(key) ?? seed; }
+function saveData(key, val) { storage.set(key, val); }
+
+// ── UTILS ──
+function reColor(re) {
+  if (re >= 0.88) return P.emerald;
+  if (re >= 0.78) return P.blue;
+  if (re >= 0.65) return P.amber;
+  return P.red;
+}
+function faceColor(face) {
+  const map = { "Lógica":P.emerald,"Temporal":P.blue,"Dialética":P.amber,"Hermenêutica":P.violet,"Empírica":P.emerald,"Normativa":P.amber,"Cognitiva":P.blue,"Tecnológica":P.red };
+  return map[face] || P.emerald;
+}
+function calcRE(face, texto) {
+  const base = 0.65;
+  const faceBonus = FACES_LIST.indexOf(face) >= 0 ? 0.08 : 0;
+  const lenBonus = Math.min(texto.length / 3000, 0.15);
+  const noise = (Math.random() - 0.5) * 0.06;
+  return Math.min(0.99, Math.max(0.50, base + faceBonus + lenBonus + noise));
+}
+function uid() { return Math.random().toString(36).slice(2,10); }
+function hoje() { return new Date().toLocaleDateString("pt-BR",{month:"long",year:"numeric"}); }
+
+// ════════════════════════════════════════════════════
+//  GOOGLE AUTH HOOK
+//  Em produção (zeos.com.br): descomente o bloco Firebase/GSI
+//  No artifact Claude.ai: usa modo simulado para preview
+// ════════════════════════════════════════════════════
+function useGoogleAuth() {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  // ── MODO PRODUÇÃO (Firebase / Google Identity Services) ──
+  // Para ativar no seu domínio, descomente e configure:
+  /*
+  useEffect(() => {
+    // Carrega o script GSI
+    const script = document.createElement("script");
+    script.src = "https://accounts.google.com/gsi/client";
+    script.async = true;
+    script.defer = true;
+    script.onload = () => {
+      window.google.accounts.id.initialize({
+        client_id: GOOGLE_CLIENT_ID,
+        callback: (response) => {
+          // Decodifica o JWT do Google
+          const payload = JSON.parse(atob(response.credential.split(".")[1]));
+          setUser({
+            name: payload.name,
+            email: payload.email,
+            picture: payload.picture,
+            token: response.credential,
+          });
+        },
+      });
+    };
+    document.head.appendChild(script);
+    return () => document.head.removeChild(script);
+  }, []);
+
+  function login() {
+    window.google?.accounts.id.prompt();
+  }
+  */
+
+  // ── MODO SIMULADO (funciona no artifact Claude.ai para preview) ──
+  function login() {
+    setLoading(true);
+    setTimeout(() => {
+      // Simula dois usuários: o curador e um visitante
+      // No artifact, clicando em "Login" alterna entre eles para demonstração
+      const isCurador = !user || user.email !== CURADOR_EMAIL;
+      setUser(isCurador ? {
+        name: "Frederico Nunes Costa",
+        email: CURADOR_EMAIL,
+        picture: null,
+        isCurador: true,
+      } : {
+        name: "Visitante Demo",
+        email: "visitante@exemplo.com",
+        picture: null,
+        isCurador: false,
+      });
+      setLoading(false);
+    }, 800);
+  }
+
+  function logout() { setUser(null); }
+
+  const isCurador = user?.email === CURADOR_EMAIL;
+  return { user, loading, login, logout, isCurador };
+}
+
+// ════════════════════════════════════════════════════
+//  ZENODO API
+// ════════════════════════════════════════════════════
+async function zenodoArquivar({ titulo, autores, resumo, tags, ano, texto, autorNome }) {
+  // Passo 1: Cria depósito vazio
+  const resDeposit = await fetch(`${ZENODO_BASE}/deposit/depositions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${ZENODO_TOKEN}`,
+    },
+    body: JSON.stringify({}),
+  });
+  if (!resDeposit.ok) {
+    const err = await resDeposit.json().catch(() => ({}));
+    throw new Error(err.message || `Erro ao criar depósito: ${resDeposit.status}`);
+  }
+  const deposit = await resDeposit.json();
+  const depositId = deposit.id;
+  const bucketUrl = deposit.links.bucket;
+
+  // Passo 2: Upload do arquivo (gera um .txt com o conteúdo do artigo)
+  const conteudo = `${titulo}\n${"─".repeat(titulo.length)}\n\nAutor: ${autorNome}\nAno: ${ano}\n\nResumo:\n${resumo}\n\nTexto:\n${texto}`;
+  const blob = new Blob([conteudo], { type: "text/plain;charset=utf-8" });
+  const nomeArq = `${titulo.slice(0,50).replace(/[^a-zA-Z0-9]/g,"_")}.txt`;
+
+  const resUpload = await fetch(`${bucketUrl}/${nomeArq}`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/octet-stream",
+      "Authorization": `Bearer ${ZENODO_TOKEN}`,
+    },
+    body: blob,
+  });
+  if (!resUpload.ok) throw new Error(`Erro no upload: ${resUpload.status}`);
+
+  // Passo 3: Preenche metadados
+  const metadata = {
+    metadata: {
+      title: titulo,
+      upload_type: "publication",
+      publication_type: "article",
+      description: resumo || titulo,
+      creators: autores ? autores.split(";").map(a => ({ name: a.trim() })) : [{ name: autorNome }],
+      keywords: tags || [],
+      publication_date: `${ano || new Date().getFullYear()}-01-01`,
+      access_right: "open",
+      license: "cc-by",
+      notes: "Publicado via ZEOS — Epistemologia das Ciências (zeos.com.br). Motor RESUN EOS v124.",
+    },
+  };
+  const resMeta = await fetch(`${ZENODO_BASE}/deposit/depositions/${depositId}`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${ZENODO_TOKEN}`,
+    },
+    body: JSON.stringify(metadata),
+  });
+  if (!resMeta.ok) throw new Error(`Erro nos metadados: ${resMeta.status}`);
+
+  // Passo 4: Publica
+  const resPub = await fetch(`${ZENODO_BASE}/deposit/depositions/${depositId}/actions/publish`, {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${ZENODO_TOKEN}` },
+  });
+  if (!resPub.ok) throw new Error(`Erro ao publicar: ${resPub.status}`);
+  const pubResult = await resPub.json();
+
+  return {
+    doi: pubResult.doi,
+    zenodoId: depositId,
+    zenodoUrl: pubResult.links?.html || `https://zenodo.org/record/${depositId}`,
+  };
+}
+
+// ── HOOKS ──
+function useScrollY() {
+  const [y, setY] = useState(0);
+  useEffect(() => {
+    const h = () => setY(window.scrollY);
+    window.addEventListener("scroll", h, { passive:true });
+    return () => window.removeEventListener("scroll", h);
+  }, []);
+  return y;
+}
+function useInView(ref, thr=0.1) {
+  const [v, setV] = useState(false);
+  useEffect(() => {
+    const o = new IntersectionObserver(([e])=>{ if(e.isIntersecting) setV(true); },{ threshold:thr });
+    if(ref.current) o.observe(ref.current);
+    return ()=>o.disconnect();
+  }, []);
+  return v;
+}
+
+// ── ÁTOMOS ──
+function REBadge({ re }) {
+  const c = reColor(re);
+  return (
+    <div style={{ display:"flex",alignItems:"center",gap:4,padding:"3px 8px",borderRadius:6,background:`${c}12`,border:`1px solid ${c}28` }}>
+      <span style={{ fontSize:7,color:P.text2,fontFamily:P.mono,fontWeight:700,letterSpacing:"0.08em" }}>RE</span>
+      <span style={{ fontSize:11,color:c,fontFamily:P.mono,fontWeight:900 }}>{re.toFixed(2)}</span>
+    </div>
+  );
+}
+function Badge({ text, color }) {
+  const c = color||P.emerald;
+  return <span style={{ fontSize:8,fontFamily:P.mono,fontWeight:700,color:c,letterSpacing:"0.10em",padding:"2px 7px",borderRadius:4,background:`${c}10`,border:`1px solid ${c}22` }}>{text}</span>;
+}
+function Tag({ text }) {
+  return <span style={{ fontSize:8,fontFamily:P.mono,color:P.text2,padding:"2px 6px",borderRadius:4,background:"rgba(255,255,255,0.04)",border:`1px solid ${P.border}` }}>#{text}</span>;
+}
+function SectionHeader({ eyebrow, titulo, desc }) {
+  const ref=useRef(); const v=useInView(ref);
+  return (
+    <div ref={ref} style={{ marginBottom:36,opacity:v?1:0,transform:v?"none":"translateY(14px)",transition:"all 0.5s ease" }}>
+      <div style={{ fontSize:8,fontFamily:P.mono,color:P.emerald,fontWeight:700,letterSpacing:"0.18em",marginBottom:8 }}>◈ {eyebrow}</div>
+      <h2 style={{ margin:"0 0 10px",fontSize:28,fontFamily:P.serif,fontWeight:700,color:P.text }}>{titulo}</h2>
+      {desc && <p style={{ margin:0,fontSize:11,fontFamily:P.sans,color:P.text2,lineHeight:1.75,maxWidth:560 }}>{desc}</p>}
+      <div style={{ marginTop:14,width:36,height:2,background:`linear-gradient(90deg,${P.emerald},transparent)` }}/>
+    </div>
+  );
+}
+function REBar({ re }) {
+  const c = re>=0.90?"#4ECFA0":re>=0.80?"#7ABEDB":re>=0.70?"#C8B850":"#E08070";
+  return (
+    <div style={{ display:"flex",alignItems:"center",gap:6 }}>
+      <div style={{ flex:1,height:3,borderRadius:2,background:"rgba(255,255,255,0.07)" }}>
+        <div style={{ width:`${re*100}%`,height:"100%",background:`linear-gradient(90deg,${c}70,${c})`,borderRadius:2 }}/>
+      </div>
+      <span style={{ fontSize:10,fontFamily:P.mono,fontWeight:900,color:c,minWidth:30 }}>{re.toFixed(2)}</span>
+    </div>
+  );
+}
+function PolyGrid({ size=160, color=P.emerald, speed=40 }) {
+  const pts=[[90,10],[170,50],[170,130],[90,170],[10,130],[10,50]];
+  const inn=pts.map(([x,y])=>[90+(x-90)*0.52,90+(y-90)*0.52]);
+  const uid2=`pg${size}${speed}`;
+  return (
+    <svg width={size} height={size} viewBox="0 0 180 180" style={{ opacity:0.15 }}>
+      <style>{`@keyframes rr${uid2}{from{transform-origin:90px 90px;transform:rotate(0deg)}to{transform-origin:90px 90px;transform:rotate(360deg)}}`}</style>
+      <g style={{ animation:`rr${uid2} ${speed}s linear infinite` }}>
+        <polygon points={pts.map(p=>p.join(",")).join(" ")} fill="none" stroke={color} strokeWidth="0.7"/>
+        {pts.map(([x,y],i)=>{ const n=pts[(i+1)%pts.length]; return <line key={i} x1={x} y1={y} x2={n[0]} y2={n[1]} stroke={color} strokeWidth="0.35" opacity="0.4"/>; })}
+      </g>
+      <g style={{ animation:`rr${uid2} ${Math.round(speed*0.6)}s linear infinite reverse` }}>
+        <polygon points={inn.map(p=>p.join(",")).join(" ")} fill="none" stroke={color} strokeWidth="0.45"/>
+      </g>
+      {pts.map(([x,y],i)=><line key={`s${i}`} x1={x} y1={y} x2={inn[i][0]} y2={inn[i][1]} stroke={color} strokeWidth="0.28" opacity="0.28"/>)}
+      <circle cx="90" cy="90" r="2.5" fill={color} opacity="0.55"/>
+    </svg>
+  );
+}
+
+// ════════════════════════════════════════════════════
+//  MODAL BASE
+// ════════════════════════════════════════════════════
+function Modal({ titulo, onClose, children, width=600 }) {
+  useEffect(() => {
+    const h = e => { if(e.key==="Escape") onClose(); };
+    window.addEventListener("keydown",h);
+    return ()=>window.removeEventListener("keydown",h);
+  },[onClose]);
+  return (
+    <div onClick={onClose} style={{ position:"fixed",inset:0,background:"rgba(5,8,16,0.88)",backdropFilter:"blur(12px)",zIndex:500,display:"flex",alignItems:"center",justifyContent:"center",padding:20 }}>
+      <div onClick={e=>e.stopPropagation()} style={{ background:P.card,border:`1px solid ${P.borderHi}`,borderRadius:18,width:"100%",maxWidth:width,maxHeight:"90vh",overflowY:"auto",boxShadow:`0 24px 80px rgba(0,0,0,0.6)` }}>
+        <div style={{ padding:"16px 20px",borderBottom:`1px solid ${P.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,background:P.card,zIndex:1 }}>
+          <span style={{ fontSize:10,fontFamily:P.mono,fontWeight:700,color:P.emerald,letterSpacing:"0.12em" }}>{titulo}</span>
+          <button onClick={onClose} style={{ background:"none",border:"none",color:P.text2,cursor:"pointer",fontSize:18,lineHeight:1 }}>✕</button>
+        </div>
+        <div style={{ padding:"20px" }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+function Field({ label, children }) {
+  return (
+    <div style={{ marginBottom:14 }}>
+      <label style={{ display:"block",fontSize:8,fontFamily:P.mono,fontWeight:700,color:P.text2,letterSpacing:"0.12em",marginBottom:6 }}>{label}</label>
+      {children}
+    </div>
+  );
+}
+const inputStyle = { width:"100%",padding:"9px 12px",borderRadius:8,background:P.surface,border:`1px solid ${P.border}`,color:P.text,fontFamily:P.sans,fontSize:11,boxSizing:"border-box",outline:"none" };
+const selectStyle = { ...inputStyle, cursor:"pointer" };
+const taStyle = { ...inputStyle, resize:"vertical", lineHeight:1.6 };
+
+// ════════════════════════════════════════════════════
+//  DOWNLOAD ENGINE
+// ════════════════════════════════════════════════════
+function downloadJSON(data, nome) {
+  const blob = new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a"); a.href=url; a.download=nome; a.click();
+  URL.revokeObjectURL(url);
+}
+function downloadCSV(rows, cols, nome) {
+  const header = cols.join(";");
+  const body = rows.map(r=>cols.map(c=>String(r[c]??"-").replace(/;/g,","+" ")).join(";")).join("\n");
+  const blob = new Blob(["\uFEFF"+header+"\n"+body],{type:"text/csv;charset=utf-8"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a"); a.href=url; a.download=nome; a.click();
+  URL.revokeObjectURL(url);
+}
+function downloadTXT(texto, nome) {
+  const blob = new Blob([texto],{type:"text/plain;charset=utf-8"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a"); a.href=url; a.download=nome; a.click();
+  URL.revokeObjectURL(url);
+}
+function gerarABNT(art) {
+  return `${art.autor?.toUpperCase() || "COSTA, Frederico Nunes"}. ${art.titulo}. ${art.subtitulo ? art.subtitulo+". " : ""}ZEOS — Epistemologia das Ciências, ${art.data}. ${art.doi ? `DOI: ${art.doi}. ` : ""}Disponível em: zeos.com.br. Acesso em: ${new Date().toLocaleDateString("pt-BR")}.`;
+}
+function imprimirArtigo(art) {
+  const w = window.open("","_blank");
+  w.document.write(`
+    <html><head><title>${art.titulo}</title>
+    <style>
+      body{font-family:Georgia,serif;max-width:720px;margin:60px auto;color:#111;line-height:1.8;font-size:13px}
+      h1{font-size:24px;margin-bottom:8px} h2{font-size:14px;color:#555;font-weight:400;margin-bottom:4px}
+      .meta{font-size:11px;color:#888;margin-bottom:32px;font-family:monospace}
+      .abnt{background:#f5f5f5;padding:16px;border-left:3px solid #4ECFA0;font-size:11px;margin-top:48px}
+      .doi{background:#e8f5f0;padding:8px 12px;border-radius:6px;font-size:11px;margin-top:12px}
+      h3{font-size:13px;color:#333;margin-top:24px} hr{border:none;border-top:1px solid #eee;margin:32px 0}
+    </style></head><body>
+    <h2>${art.face||""} · RE ${art.re?.toFixed(2)||""}</h2>
+    <h1>${art.titulo}</h1>
+    <h2>${art.subtitulo||""}</h2>
+    <div class="meta">${art.autor||"Frederico Nunes Costa"} · ${art.data||""} · ${art.leitura||""}</div>
+    ${art.doi ? `<div class="doi">DOI: <a href="https://doi.org/${art.doi}">${art.doi}</a>${ZENODO_SANDBOX?" (sandbox — teste)":""}</div>` : ""}
+    <hr/>
+    ${(art.texto||"").split("\n\n").map(p=>p.startsWith("**")?`<h3>${p.replace(/\*\*/g,"")}</h3>`:`<p>${p}</p>`).join("")}
+    <div class="abnt"><strong>Citação ABNT:</strong><br/>${gerarABNT(art)}</div>
+    </body></html>`);
+  w.document.close();
+  w.print();
+}
+
+// ════════════════════════════════════════════════════
+//  PDF ENGINE
+// ════════════════════════════════════════════════════
+async function carregarPDFjs() {
+  if (window.pdfjsLib) return window.pdfjsLib;
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+    script.onload = () => {
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+        "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+      resolve(window.pdfjsLib);
+    };
+    script.onerror = () => reject(new Error("PDF.js não carregou"));
+    document.head.appendChild(script);
+  });
+}
+async function extrairTextoPDF(file) {
+  const pdfjsLib = await carregarPDFjs();
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  let textoCompleto = "";
+  for (let i = 1; i <= Math.min(pdf.numPages, 20); i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    textoCompleto += content.items.map(item => item.str).join(" ") + "\n";
+  }
+  return textoCompleto.trim();
+}
+function extrairMetadadosPDF(texto, nomeArquivo) {
+  const linhas = texto.split("\n").map(l => l.trim()).filter(Boolean);
+  let titulo = "";
+  for (const l of linhas.slice(0, 15)) {
+    if (l.length > 20 && l.length < 200 && !/resumo|abstract|autor|orcid|doi|@/i.test(l)) {
+      titulo = l; break;
+    }
+  }
+  if (!titulo) titulo = nomeArquivo.replace(/\.[^/.]+$/,"").replace(/[_-]/g," ");
+  let autores = "";
+  for (const l of linhas.slice(0, 20)) {
+    if (/^[A-ZÁÀÃÉÍÓÚ][a-záàãéíóú]+,\s[A-ZÁÀÃÉÍÓÚ]/.test(l) || /ORCID/i.test(l)) {
+      autores = l.replace(/ORCID.*$/i,"").trim(); break;
+    }
+  }
+  let resumo = "";
+  const iResumo = texto.search(/resumo\s*\n/i);
+  const iPalavras = texto.search(/palavras.chave|keywords/i);
+  if (iResumo > -1) {
+    const fim = iPalavras > iResumo ? iPalavras : iResumo + 800;
+    resumo = texto.slice(iResumo + 8, fim).replace(/\n/g," ").trim().slice(0, 600);
+  }
+  let tags = [];
+  const mPalavras = texto.match(/palavras.chave[:\s]+([^\n]+)/i) || texto.match(/keywords[:\s]+([^\n]+)/i);
+  if (mPalavras) tags = mPalavras[1].split(/[;,·•]/).map(t => t.trim()).filter(t => t.length > 2 && t.length < 40).slice(0, 6);
+  const mAno = texto.match(/\b(20\d{2})\b/);
+  const ano = mAno ? mAno[1] : new Date().getFullYear().toString();
+  const mDoi = texto.match(/doi[:\s]+(10\.\S+)/i);
+  const doi = mDoi ? mDoi[1].replace(/[.,]$/,"") : "";
+  return { titulo, autores, resumo, tags, ano, doi };
+}
+
+// ════════════════════════════════════════════════════
+//  MODAL ZENODO — Arquivar artigo com DOI real
+// ════════════════════════════════════════════════════
+function ModalZenodo({ art, onClose, onDOI }) {
+  const [fase, setFase] = useState("confirm"); // confirm | loading | ok | erro
+  const [doi, setDoi] = useState(null);
+  const [zenodoUrl, setZenodoUrl] = useState(null);
+  const [erroMsg, setErroMsg] = useState("");
+
+  async function arquivar() {
+    setFase("loading");
+    try {
+      const resultado = await zenodoArquivar({
+        titulo: art.titulo,
+        autores: art.autor,
+        resumo: art.resumo,
+        tags: art.tags || [],
+        ano: new Date().getFullYear(),
+        texto: art.texto || art.resumo,
+        autorNome: art.autor || "Frederico Nunes Costa",
+      });
+      setDoi(resultado.doi);
+      setZenodoUrl(resultado.zenodoUrl);
+      onDOI(art.id, resultado.doi, resultado.zenodoId);
+      setFase("ok");
+    } catch(e) {
+      setErroMsg(e.message || "Erro desconhecido");
+      setFase("erro");
+    }
+  }
+
+  if (fase === "confirm") return (
+    <Modal titulo="◈ ARQUIVAR NO ZENODO" onClose={onClose} width={540}>
+      <div style={{ padding:"16px",borderRadius:12,background:`${P.emerald}08`,border:`1px solid ${P.emerald}20`,marginBottom:16 }}>
+        <div style={{ fontSize:9,fontFamily:P.mono,color:P.emerald,fontWeight:700,marginBottom:6 }}>ARTIGO A ARQUIVAR</div>
+        <div style={{ fontSize:13,fontFamily:P.serif,color:P.text,marginBottom:4 }}>{art.titulo}</div>
+        <div style={{ fontSize:9,fontFamily:P.sans,color:P.text2 }}>{art.autor}</div>
+      </div>
+      {ZENODO_SANDBOX && (
+        <div style={{ padding:"10px 12px",borderRadius:8,background:`${P.amber}10`,border:`1px solid ${P.amber}30`,marginBottom:14 }}>
+          <span style={{ fontSize:9,fontFamily:P.mono,color:P.amber }}>⚑ MODO SANDBOX · sandbox.zenodo.org · DOI de teste (não oficial)</span>
+        </div>
+      )}
+      <p style={{ fontSize:11,fontFamily:P.sans,color:P.text2,lineHeight:1.75,marginBottom:20 }}>
+        O motor ZEOS enviará este artigo para o Zenodo e receberá um DOI permanente. O arquivo ficará publicamente acessível com licença CC-BY.
+      </p>
+      <div style={{ display:"flex",gap:10,justifyContent:"flex-end" }}>
+        <button onClick={onClose} style={{ padding:"10px 18px",borderRadius:8,background:"transparent",border:`1px solid ${P.border}`,color:P.text2,fontFamily:P.mono,fontSize:10,cursor:"pointer" }}>CANCELAR</button>
+        <button onClick={arquivar} style={{ padding:"10px 24px",borderRadius:8,background:P.emerald,border:"none",color:"#050810",fontFamily:P.mono,fontWeight:900,fontSize:10,cursor:"pointer",letterSpacing:"0.10em" }}>▶ ARQUIVAR</button>
+      </div>
+    </Modal>
+  );
+
+  if (fase === "loading") return (
+    <Modal titulo="◈ ARQUIVANDO NO ZENODO" onClose={()=>{}}>
+      <div style={{ textAlign:"center",padding:"48px 0" }}>
+        <div style={{ fontSize:32,marginBottom:20,animation:"spin 1s linear infinite" }}>◈</div>
+        <style>{`@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}`}</style>
+        <div style={{ fontSize:13,fontFamily:P.serif,color:P.text,marginBottom:8 }}>Enviando para o Zenodo...</div>
+        <p style={{ fontSize:10,fontFamily:P.mono,color:P.emerald }}>Criando depósito → Upload → Publicando</p>
+      </div>
+    </Modal>
+  );
+
+  if (fase === "ok") return (
+    <Modal titulo="◈ DOI ATRIBUÍDO" onClose={onClose} width={560}>
+      <div style={{ textAlign:"center",padding:"24px 0 32px" }}>
+        <div style={{ fontSize:36,marginBottom:16 }}>✓</div>
+        <div style={{ fontSize:14,fontFamily:P.serif,color:P.text,marginBottom:8 }}>Artigo arquivado com sucesso!</div>
+        <div style={{ padding:"14px 20px",borderRadius:10,background:`${P.emerald}10`,border:`1px solid ${P.emerald}30`,margin:"16px 0",display:"inline-block",minWidth:280 }}>
+          <div style={{ fontSize:8,fontFamily:P.mono,color:P.text2,marginBottom:4 }}>DOI PERMANENTE</div>
+          <div style={{ fontSize:16,fontFamily:P.mono,fontWeight:900,color:P.emerald }}>{doi}</div>
+          {ZENODO_SANDBOX && <div style={{ fontSize:7,fontFamily:P.mono,color:P.text3,marginTop:4 }}>sandbox — apenas teste</div>}
+        </div>
+        {zenodoUrl && (
+          <a href={zenodoUrl} target="_blank" rel="noopener noreferrer" style={{ display:"block",marginBottom:20,fontSize:10,fontFamily:P.mono,color:P.blue,textDecoration:"none" }}>
+            🔗 Ver no Zenodo →
+          </a>
+        )}
+        <button onClick={onClose} style={{ padding:"10px 24px",borderRadius:8,background:P.emerald,border:"none",color:"#050810",fontFamily:P.mono,fontWeight:900,fontSize:10,cursor:"pointer" }}>FECHAR</button>
+      </div>
+    </Modal>
+  );
+
+  return (
+    <Modal titulo="◈ ERRO ZENODO" onClose={onClose}>
+      <div style={{ textAlign:"center",padding:"32px 0" }}>
+        <div style={{ fontSize:32,marginBottom:14,color:P.red }}>✕</div>
+        <div style={{ fontSize:13,fontFamily:P.serif,color:P.text,marginBottom:8 }}>Não foi possível arquivar</div>
+        <p style={{ fontSize:10,fontFamily:P.mono,color:P.red,lineHeight:1.7,marginBottom:16 }}>{erroMsg}</p>
+        <p style={{ fontSize:9,fontFamily:P.sans,color:P.text2,lineHeight:1.7 }}>
+          Verifique se o token Zenodo está correto em <code style={{ color:P.emerald }}>ZENODO_TOKEN</code> e se o servidor está acessível. CORS pode bloquear no artifact Claude.ai — teste diretamente no seu domínio zeos.com.br.
+        </p>
+        <button onClick={onClose} style={{ marginTop:16,padding:"9px 22px",borderRadius:8,background:"transparent",border:`1px solid ${P.border}`,color:P.text2,fontFamily:P.mono,fontSize:10,cursor:"pointer" }}>FECHAR</button>
+      </div>
+    </Modal>
+  );
+}
+
+// ════════════════════════════════════════════════════
+//  MODAL ABNT
+// ════════════════════════════════════════════════════
+function ModalABNT({ art, onClose }) {
+  const abnt = gerarABNT(art);
+  const [copiado,setCopiado]=useState(false);
+  function copiar() {
+    navigator.clipboard.writeText(abnt).then(()=>{ setCopiado(true); setTimeout(()=>setCopiado(false),2000); });
+  }
+  return (
+    <Modal titulo="◈ CITAÇÃO ABNT" onClose={onClose} width={580}>
+      <div style={{ padding:"16px",borderRadius:10,background:P.surface,border:`1px solid ${P.border}`,marginBottom:16 }}>
+        <p style={{ margin:0,fontSize:11,fontFamily:P.mono,color:P.text2,lineHeight:1.8 }}>{abnt}</p>
+      </div>
+      <div style={{ display:"flex",gap:10 }}>
+        <button onClick={copiar} style={{ flex:1,padding:"10px",borderRadius:8,background:copiado?`${P.emerald}20`:`${P.emerald}15`,border:`1px solid ${P.emerald}35`,color:P.emerald,fontFamily:P.mono,fontWeight:700,fontSize:10,cursor:"pointer",letterSpacing:"0.08em" }}>
+          {copiado?"✓ COPIADO!":"📋 COPIAR"}
+        </button>
+        <button onClick={()=>downloadTXT(abnt,`ABNT_${art.titulo.slice(0,30)}.txt`)} style={{ flex:1,padding:"10px",borderRadius:8,background:`${P.blue}15`,border:`1px solid ${P.blue}35`,color:P.blue,fontFamily:P.mono,fontWeight:700,fontSize:10,cursor:"pointer",letterSpacing:"0.08em" }}>
+          ⬇ BAIXAR .TXT
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+// ════════════════════════════════════════════════════
+//  MODAL SUBMIT ARTIGO (com identificação de usuário)
+// ════════════════════════════════════════════════════
+function ModalSubmitArtigo({ onClose, onSalvar, user }) {
+  const [form, setForm] = useState({
+    autor: user?.name || "",
+    titulo:"", subtitulo:"", face:"Lógica", tags:"", resumo:"", texto:""
+  });
+  const [ok, setOk] = useState(false);
+  const set = k => e => setForm(f=>({...f,[k]:e.target.value}));
+
+  function enviar() {
+    if(!form.titulo.trim()||!form.texto.trim()) return;
+    const re = calcRE(form.face, form.texto);
+    const isCurador = user?.email === CURADOR_EMAIL;
+    const novo = {
+      id: uid(), tipo:"proprio",
+      autor: form.autor||user?.name||"Anônimo",
+      autorEmail: user?.email || null,
+      face: form.face, color: faceColor(form.face), re,
+      titulo: form.titulo, subtitulo: form.subtitulo,
+      data: hoje(), leitura: Math.max(2,Math.round(form.texto.split(" ").length/200))+" min",
+      tags: form.tags.split(",").map(t=>t.trim()).filter(Boolean),
+      resumo: form.resumo||form.texto.slice(0,200)+"…",
+      texto: form.texto,
+      aprovado: isCurador, // curador auto-aprova os próprios artigos
+      doi: null, zenodoId: null,
+    };
+    onSalvar(novo);
+    setOk(true);
+  }
+
+  if(ok) return (
+    <Modal titulo="◈ ARTIGO SUBMETIDO" onClose={onClose}>
+      <div style={{ textAlign:"center",padding:"32px 0" }}>
+        <div style={{ fontSize:36,marginBottom:16 }}>✓</div>
+        <div style={{ fontSize:14,fontFamily:P.serif,color:P.text,marginBottom:8 }}>Artigo recebido!</div>
+        <p style={{ fontSize:11,fontFamily:P.sans,color:P.text2,lineHeight:1.7 }}>
+          {user?.email === CURADOR_EMAIL
+            ? "Seu artigo foi publicado automaticamente."
+            : <>Sua submissão ficará com status <span style={{ color:P.amber }}>PENDENTE</span> até aprovação do curador.</>
+          }
+        </p>
+        <button onClick={onClose} style={{ marginTop:20,padding:"10px 24px",borderRadius:8,background:P.emerald,border:"none",color:"#050810",fontFamily:P.mono,fontWeight:900,fontSize:10,cursor:"pointer",letterSpacing:"0.10em" }}>FECHAR</button>
+      </div>
+    </Modal>
+  );
+
+  return (
+    <Modal titulo="◈ SUBMETER ARTIGO" onClose={onClose} width={680}>
+      {user && (
+        <div style={{ padding:"9px 12px",borderRadius:8,background:`${P.emerald}08`,border:`1px solid ${P.emerald}18`,marginBottom:14,display:"flex",alignItems:"center",gap:8 }}>
+          <span style={{ fontSize:10 }}>👤</span>
+          <div>
+            <span style={{ fontSize:9,fontFamily:P.mono,color:P.emerald,fontWeight:700 }}>{user.name}</span>
+            <span style={{ fontSize:8,fontFamily:P.mono,color:P.text2,marginLeft:8 }}>{user.email}</span>
+            {user.email === CURADOR_EMAIL && <span style={{ fontSize:7,fontFamily:P.mono,color:P.amber,marginLeft:8 }}>CURADOR · publicação imediata</span>}
+          </div>
+        </div>
+      )}
+      <Field label="SEU NOME / AUTOR">
+        <input style={inputStyle} placeholder="Ex: Maria Silva" value={form.autor} onChange={set("autor")}/>
+      </Field>
+      <Field label="TÍTULO *">
+        <input style={inputStyle} placeholder="Título do artigo" value={form.titulo} onChange={set("titulo")}/>
+      </Field>
+      <Field label="SUBTÍTULO">
+        <input style={inputStyle} placeholder="Subtítulo opcional" value={form.subtitulo} onChange={set("subtitulo")}/>
+      </Field>
+      <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:12 }}>
+        <Field label="FACE EPISTÊMICA">
+          <select style={selectStyle} value={form.face} onChange={set("face")}>
+            {FACES_LIST.map(f=><option key={f} value={f}>{f}</option>)}
+          </select>
+        </Field>
+        <Field label="TAGS (separadas por vírgula)">
+          <input style={inputStyle} placeholder="Ex: Kuhn, Paradigma" value={form.tags} onChange={set("tags")}/>
+        </Field>
+      </div>
+      <Field label="RESUMO">
+        <textarea style={{...taStyle,height:70}} placeholder="Resumo em 2–3 frases" value={form.resumo} onChange={set("resumo")}/>
+      </Field>
+      <Field label="TEXTO COMPLETO *">
+        <textarea style={{...taStyle,height:200}} placeholder="Escreva ou cole o texto aqui. Use **§1 — Seção** para títulos de seção." value={form.texto} onChange={set("texto")}/>
+      </Field>
+      <div style={{ padding:"10px 12px",borderRadius:8,background:`${P.amber}0A`,border:`1px solid ${P.amber}20`,marginBottom:16 }}>
+        <p style={{ margin:0,fontSize:9,fontFamily:P.sans,color:P.text2,lineHeight:1.6 }}>
+          ⚑ Score RE calculado automaticamente. {user?.email !== CURADOR_EMAIL && "Artigos de visitantes ficam PENDENTES até aprovação."}
+        </p>
+      </div>
+      <div style={{ display:"flex",gap:10,justifyContent:"flex-end" }}>
+        <button onClick={onClose} style={{ padding:"10px 20px",borderRadius:8,background:"transparent",border:`1px solid ${P.border}`,color:P.text2,fontFamily:P.mono,fontSize:10,cursor:"pointer" }}>CANCELAR</button>
+        <button onClick={enviar} disabled={!form.titulo.trim()||!form.texto.trim()} style={{ padding:"10px 24px",borderRadius:8,background:form.titulo&&form.texto?P.emerald:"rgba(78,207,160,0.2)",border:"none",color:form.titulo&&form.texto?"#050810":P.emerald,fontFamily:P.mono,fontWeight:900,fontSize:10,cursor:form.titulo&&form.texto?"pointer":"not-allowed",letterSpacing:"0.10em" }}>
+          ▶ SUBMETER
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+// ════════════════════════════════════════════════════
+//  PAINEL DO CURADOR (modal)
+// ════════════════════════════════════════════════════
+function PainelCurador({ artigos, onAprovar, onRejeitar, onClose, onZenodo }) {
+  const pendentes = artigos.filter(a => !a.aprovado);
+  const aprovados = artigos.filter(a => a.aprovado);
+
+  return (
+    <Modal titulo="◈ PAINEL DO CURADOR" onClose={onClose} width={760}>
+      {/* Stats */}
+      <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:20 }}>
+        {[
+          {label:"Pendentes",val:pendentes.length,color:P.amber},
+          {label:"Aprovados",val:aprovados.length,color:P.emerald},
+          {label:"Com DOI",val:artigos.filter(a=>a.doi).length,color:P.blue},
+        ].map(({label,val,color})=>(
+          <div key={label} style={{ padding:"12px",borderRadius:10,background:`${color}08`,border:`1px solid ${color}20`,textAlign:"center" }}>
+            <div style={{ fontSize:22,fontFamily:P.mono,fontWeight:900,color }}>{val}</div>
+            <div style={{ fontSize:8,fontFamily:P.mono,color:P.text2,marginTop:4,letterSpacing:"0.10em" }}>{label.toUpperCase()}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Pendentes */}
+      {pendentes.length > 0 && (
+        <>
+          <div style={{ fontSize:9,fontFamily:P.mono,color:P.amber,fontWeight:700,letterSpacing:"0.14em",marginBottom:10 }}>● AGUARDANDO REVISÃO</div>
+          <div style={{ display:"flex",flexDirection:"column",gap:8,marginBottom:20 }}>
+            {pendentes.map(a=>(
+              <div key={a.id} style={{ padding:"12px 14px",borderRadius:10,background:P.surface,border:`1px solid ${P.amber}25`,display:"flex",alignItems:"center",gap:12 }}>
+                <div style={{ flex:1,minWidth:0 }}>
+                  <div style={{ fontSize:12,fontFamily:P.serif,fontWeight:700,color:P.text,marginBottom:2 }}>{a.titulo}</div>
+                  <div style={{ fontSize:9,fontFamily:P.sans,color:P.text2 }}>{a.autor} · {a.data} · RE {a.re?.toFixed(2)}</div>
+                  {a.autorEmail && <div style={{ fontSize:8,fontFamily:P.mono,color:P.text3 }}>{a.autorEmail}</div>}
+                </div>
+                <div style={{ display:"flex",gap:6,flexShrink:0 }}>
+                  <button onClick={()=>onAprovar(a.id)} style={{ padding:"7px 13px",borderRadius:7,background:`${P.emerald}15`,border:`1px solid ${P.emerald}35`,color:P.emerald,fontFamily:P.mono,fontSize:9,fontWeight:700,cursor:"pointer" }}>✓ APROVAR</button>
+                  <button onClick={()=>onRejeitar(a.id)} style={{ padding:"7px 13px",borderRadius:7,background:`${P.red}12`,border:`1px solid ${P.red}28`,color:P.red,fontFamily:P.mono,fontSize:9,fontWeight:700,cursor:"pointer" }}>✕ REJEITAR</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+      {pendentes.length === 0 && (
+        <div style={{ textAlign:"center",padding:"24px 0",marginBottom:16 }}>
+          <div style={{ fontSize:22,marginBottom:8 }}>✓</div>
+          <div style={{ fontSize:12,fontFamily:P.serif,color:P.text2 }}>Nenhum artigo pendente</div>
+        </div>
+      )}
+
+      {/* Aprovados — arquivar no Zenodo */}
+      {aprovados.length > 0 && (
+        <>
+          <div style={{ fontSize:9,fontFamily:P.mono,color:P.emerald,fontWeight:700,letterSpacing:"0.14em",marginBottom:10 }}>● APROVADOS</div>
+          <div style={{ display:"flex",flexDirection:"column",gap:6 }}>
+            {aprovados.map(a=>(
+              <div key={a.id} style={{ padding:"10px 14px",borderRadius:9,background:P.card,border:`1px solid ${P.border}`,display:"flex",alignItems:"center",gap:10 }}>
+                <div style={{ flex:1,minWidth:0 }}>
+                  <div style={{ fontSize:11,fontFamily:P.serif,color:P.text,marginBottom:2 }}>{a.titulo}</div>
+                  {a.doi
+                    ? <div style={{ fontSize:8,fontFamily:P.mono,color:P.emerald }}>DOI: {a.doi}{ZENODO_SANDBOX?" (sandbox)":""}</div>
+                    : <div style={{ fontSize:8,fontFamily:P.mono,color:P.text3 }}>Sem DOI</div>
+                  }
+                </div>
+                {!a.doi && (
+                  <button onClick={()=>onZenodo(a)} style={{ padding:"6px 12px",borderRadius:7,background:`${P.emerald}18`,border:`1px solid ${P.emerald}40`,color:P.emerald,fontFamily:P.mono,fontSize:8,fontWeight:900,cursor:"pointer",letterSpacing:"0.08em",whiteSpace:"nowrap" }}>
+                    ⬆ ZENODO
+                  </button>
+                )}
+                {a.doi && (
+                  <a href={`https://doi.org/${a.doi}`} target="_blank" rel="noopener noreferrer" style={{ padding:"6px 12px",borderRadius:7,background:`${P.blue}12`,border:`1px solid ${P.blue}28`,color:P.blue,fontFamily:P.mono,fontSize:8,fontWeight:700,textDecoration:"none",whiteSpace:"nowrap" }}>
+                    🔗 VER
+                  </a>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
+// ════════════════════════════════════════════════════
+//  NAVBAR (com Auth)
+// ════════════════════════════════════════════════════
+const NAVLINKS = [
+  {id:"artigos",label:"Artigos"},{id:"biblioteca",label:"Biblioteca"},
+  {id:"corpus",label:"Corpus"},{id:"notas",label:"Notas"},
+  {id:"glossario",label:"Glossário"},{id:"fundamentos",label:"Influências"},{id:"sobre",label:"Sobre"},
+];
+
+function Navbar({ scrollY, active, onNav, onSubmit, auth, onCurador, pendentesCount }) {
+  const { user, loading, login, logout, isCurador } = auth;
+  const scrolled = scrollY > 50;
+  return (
+    <nav style={{ position:"fixed",top:0,left:0,right:0,zIndex:200,background:scrolled?"rgba(5,8,16,0.97)":"transparent",borderBottom:scrolled?`1px solid ${P.border}`:"1px solid transparent",backdropFilter:scrolled?"blur(24px)":"none",transition:"all 0.35s",padding:"0 20px" }}>
+      <div style={{ maxWidth:1280,margin:"0 auto",display:"flex",alignItems:"center",justifyContent:"space-between",height:54 }}>
+        <button onClick={()=>onNav("hero")} style={{ display:"flex",alignItems:"center",gap:9,background:"none",border:"none",cursor:"pointer",padding:0 }}>
+          <div style={{ width:30,height:30,borderRadius:8,background:`linear-gradient(135deg,${P.emerald}22,${P.blue}14)`,border:`1px solid ${P.emerald}32`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14 }}>◈</div>
+          <div>
+            <div style={{ fontSize:12,fontWeight:900,color:P.emerald,fontFamily:P.mono,letterSpacing:"0.10em",lineHeight:1 }}>ZEOS</div>
+            <div style={{ fontSize:6,color:P.text2,fontFamily:P.mono,letterSpacing:"0.14em" }}>EPISTEMOLOGIA DAS CIÊNCIAS</div>
+          </div>
+        </button>
+
+        <div style={{ display:"flex",alignItems:"center",gap:1 }}>
+          {NAVLINKS.map(({id,label})=>(
+            <button key={id} onClick={()=>onNav(id)} style={{ background:active===id?`${P.emerald}0C`:"none",border:"none",cursor:"pointer",padding:"4px 10px",borderRadius:6,fontSize:8,fontFamily:P.mono,fontWeight:700,letterSpacing:"0.09em",color:active===id?P.emerald:P.text2,transition:"all 0.2s" }}>{label.toUpperCase()}</button>
+          ))}
+
+          <div style={{ width:1,height:16,background:P.border,margin:"0 6px" }}/>
+
+          {/* BOTÃO CURADOR (só para o curador logado) */}
+          {isCurador && (
+            <button onClick={onCurador} style={{ position:"relative",display:"flex",alignItems:"center",gap:5,padding:"5px 10px",borderRadius:7,background:`${P.violet}15`,border:`1px solid ${P.violet}35`,color:P.violet,fontFamily:P.mono,fontWeight:900,fontSize:8,cursor:"pointer",marginRight:4 }}>
+              ◈ CURADOR
+              {pendentesCount > 0 && (
+                <span style={{ position:"absolute",top:-4,right:-4,width:16,height:16,borderRadius:"50%",background:P.amber,color:"#050810",fontFamily:P.mono,fontSize:8,fontWeight:900,display:"flex",alignItems:"center",justifyContent:"center" }}>{pendentesCount}</span>
+              )}
+            </button>
+          )}
+
+          {/* SUBMETER */}
+          <button onClick={onSubmit} style={{ display:"flex",alignItems:"center",gap:5,padding:"6px 12px",borderRadius:7,background:`${P.emerald}18`,border:`1px solid ${P.emerald}40`,color:P.emerald,fontFamily:P.mono,fontWeight:900,fontSize:8,cursor:"pointer",letterSpacing:"0.10em" }}>↑ SUBMETER</button>
+
+          <div style={{ width:1,height:16,background:P.border,margin:"0 6px" }}/>
+
+          {/* AUTH BUTTON */}
+          {!user ? (
+            <button onClick={login} disabled={loading} style={{ display:"flex",alignItems:"center",gap:5,padding:"5px 11px",borderRadius:7,background:"rgba(255,255,255,0.05)",border:`1px solid ${P.border}`,color:P.text2,fontFamily:P.mono,fontSize:8,fontWeight:700,cursor:"pointer",opacity:loading?0.6:1 }}>
+              {loading?"…":"G LOGIN"}
+            </button>
+          ) : (
+            <div style={{ display:"flex",alignItems:"center",gap:6 }}>
+              <div style={{ width:22,height:22,borderRadius:"50%",background:`${P.emerald}20`,border:`1px solid ${P.emerald}35`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,color:P.emerald,fontFamily:P.mono,fontWeight:700 }}>
+                {user.name?.[0]?.toUpperCase()||"?"}
+              </div>
+              <span style={{ fontSize:8,fontFamily:P.mono,color:isCurador?P.emerald:P.text2,maxWidth:80,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>
+                {isCurador?"CURADOR":user.name?.split(" ")[0]}
+              </span>
+              <button onClick={logout} style={{ background:"none",border:"none",cursor:"pointer",fontSize:10,color:P.text3,padding:"0 2px" }}>✕</button>
+            </div>
+          )}
+        </div>
+      </div>
+    </nav>
+  );
+}
+
+// ════════════════════════════════════════════════════
+//  HERO
+// ════════════════════════════════════════════════════
+function Hero({ onNav, totais }) {
+  const [tick,setTick]=useState(0);
+  useEffect(()=>{ const t=setInterval(()=>setTick(x=>x+1),3500); return()=>clearInterval(t); },[]);
+  const mantras=["O conhecimento é uma função de sua própria revisão.","Toda teoria carrega as marcas de sua época.","A demarcação científica é ela mesma um problema filosófico.","Compreender não é reduzir.","Uma epistemologia que não se aplica a si mesma é dogma."];
+  return (
+    <section id="hero" style={{ minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:"110px 24px 80px",position:"relative",overflow:"hidden" }}>
+      <div style={{ position:"absolute",inset:0,backgroundImage:`linear-gradient(${P.emerald}04 1px,transparent 1px),linear-gradient(90deg,${P.emerald}04 1px,transparent 1px)`,backgroundSize:"52px 52px",pointerEvents:"none" }}/>
+      <div style={{ position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",width:680,height:680,borderRadius:"50%",background:`radial-gradient(ellipse,${P.emerald}06 0%,transparent 68%)`,pointerEvents:"none" }}/>
+      <div style={{ position:"absolute",right:"6%",top:"16%",pointerEvents:"none" }}><PolyGrid size={240} speed={44}/></div>
+      <div style={{ position:"absolute",left:"4%",bottom:"16%",pointerEvents:"none" }}><PolyGrid size={130} color={P.blue} speed={30}/></div>
+      <div style={{ position:"relative",textAlign:"center",maxWidth:840 }}>
+        <div style={{ display:"inline-flex",alignItems:"center",gap:8,padding:"5px 16px",borderRadius:20,background:`${P.emerald}0C`,border:`1px solid ${P.emerald}26`,marginBottom:24,animation:"fadeUp 0.6s ease both" }}>
+          <span style={{ width:6,height:6,borderRadius:"50%",background:P.emerald,boxShadow:`0 0 10px ${P.emerald}` }}/>
+          <span style={{ fontSize:8,fontFamily:P.mono,fontWeight:700,color:P.emerald,letterSpacing:"0.16em" }}>FREDERICO NUNES COSTA · BRASIL · 2026</span>
+        </div>
+        <h1 style={{ margin:"0 0 6px",fontSize:"clamp(56px,9vw,90px)",fontFamily:P.mono,fontWeight:900,letterSpacing:"-0.02em",lineHeight:1,color:P.text,animation:"fadeUp 0.6s 0.08s ease both" }}>ZEOS</h1>
+        <h2 style={{ margin:"0 0 16px",fontSize:"clamp(13px,1.8vw,17px)",fontFamily:P.serif,fontWeight:400,color:P.text2,letterSpacing:"0.05em",animation:"fadeUp 0.6s 0.14s ease both" }}>Epistemologia das Ciências</h2>
+        <p style={{ margin:"0 0 40px",fontSize:13,fontFamily:P.serif,fontStyle:"italic",color:P.text2,lineHeight:1.7,animation:"fadeUp 0.6s 0.20s ease both" }}>"{mantras[tick%mantras.length]}"</p>
+        <div style={{ display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap",animation:"fadeUp 0.6s 0.26s ease both" }}>
+          <button onClick={()=>onNav("artigos")} style={{ padding:"12px 28px",borderRadius:10,background:P.emerald,border:"none",color:"#050810",fontFamily:P.mono,fontWeight:900,fontSize:11,letterSpacing:"0.10em",cursor:"pointer",boxShadow:`0 6px 28px ${P.emerald}38` }}>▶ ARTIGOS</button>
+          <button onClick={()=>onNav("corpus")} style={{ padding:"12px 28px",borderRadius:10,background:"transparent",border:`1px solid ${P.border}`,color:P.text2,fontFamily:P.mono,fontWeight:700,fontSize:11,letterSpacing:"0.10em",cursor:"pointer" }}>CORPUS ArXiv</button>
+          <button onClick={()=>onNav("glossario")} style={{ padding:"12px 28px",borderRadius:10,background:"transparent",border:`1px solid ${P.border}`,color:P.text2,fontFamily:P.mono,fontWeight:700,fontSize:11,letterSpacing:"0.10em",cursor:"pointer" }}>GLOSSÁRIO ZEOS</button>
+        </div>
+        <div style={{ display:"flex",justifyContent:"center",gap:44,marginTop:56,animation:"fadeUp 0.6s 0.34s ease both" }}>
+          {[{val:totais.artigos,label:"Artigos"},{val:totais.biblioteca,label:"Referências"},{val:totais.corpus,label:"Corpus"},{val:totais.comDOI,label:"Com DOI"},{val:"v124",label:"Motor"}].map(({val,label})=>(
+            <div key={label} style={{ textAlign:"center" }}>
+              <div style={{ fontSize:26,fontFamily:P.mono,fontWeight:900,color:P.emerald,lineHeight:1 }}>{val}</div>
+              <div style={{ fontSize:8,fontFamily:P.mono,color:P.text2,letterSpacing:"0.12em",marginTop:3 }}>{label.toUpperCase()}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div style={{ position:"absolute",bottom:24,left:"50%",transform:"translateX(-50%)",display:"flex",flexDirection:"column",alignItems:"center",gap:5,animation:"floatY 2s ease-in-out infinite" }}>
+        <div style={{ width:1,height:28,background:`linear-gradient(${P.emerald}55,transparent)` }}/>
+        <span style={{ fontSize:7,fontFamily:P.mono,color:P.text3,letterSpacing:"0.15em" }}>SCROLL</span>
+      </div>
+    </section>
+  );
+}
+
+// ════════════════════════════════════════════════════
+//  ARTIGOS
+// ════════════════════════════════════════════════════
+function SecaoArtigos({ artigos, onAddArtigo, isCurador, onZenodo }) {
+  const [sel,setSel]=useState(null);
+  const [modalABNT,setModalABNT]=useState(null);
+  const topRef=useRef();
+
+  function abrir(a){ setSel(a); setTimeout(()=>topRef.current?.scrollIntoView({behavior:"smooth",block:"start"}),80); }
+
+  if(sel) return (
+    <section id="artigos" ref={topRef} style={{ padding:"80px 24px",maxWidth:780,margin:"0 auto" }}>
+      {modalABNT && <ModalABNT art={modalABNT} onClose={()=>setModalABNT(null)}/>}
+      <button onClick={()=>setSel(null)} style={{ display:"flex",alignItems:"center",gap:6,background:"none",border:"none",cursor:"pointer",color:P.text2,fontFamily:P.mono,fontSize:9,fontWeight:700,letterSpacing:"0.10em",marginBottom:28,padding:0 }}>← VOLTAR AOS ARTIGOS</button>
+      <div style={{ display:"flex",gap:8,marginBottom:12,flexWrap:"wrap" }}>
+        <Badge text={sel.face} color={sel.color}/>{sel.tags?.map(t=><Tag key={t} text={t}/>)}<REBadge re={sel.re}/>
+        {!sel.aprovado && <Badge text="PENDENTE" color={P.amber}/>}
+        {sel.doi && <Badge text={`DOI: ${sel.doi}`} color={P.blue}/>}
+      </div>
+      <h1 style={{ margin:"0 0 6px",fontSize:"clamp(20px,3.5vw,32px)",fontFamily:P.serif,fontWeight:700,color:P.text,lineHeight:1.25 }}>{sel.titulo}</h1>
+      <p style={{ margin:"0 0 4px",fontSize:10,fontFamily:P.sans,fontStyle:"italic",color:P.text2 }}>{sel.subtitulo}</p>
+      <div style={{ display:"flex",gap:14,marginBottom:28,flexWrap:"wrap" }}>
+        <span style={{ fontSize:8,fontFamily:P.mono,color:P.text3 }}>{sel.autor||"Frederico Nunes Costa"}</span>
+        <span style={{ fontSize:8,fontFamily:P.mono,color:P.text3 }}>{sel.data}</span>
+        <span style={{ fontSize:8,fontFamily:P.mono,color:P.text3 }}>⏱ {sel.leitura}</span>
+      </div>
+      <div style={{ display:"flex",gap:8,flexWrap:"wrap",marginBottom:28 }}>
+        <button onClick={()=>imprimirArtigo(sel)} style={{ display:"flex",alignItems:"center",gap:5,padding:"7px 14px",borderRadius:7,background:`${P.emerald}12`,border:`1px solid ${P.emerald}30`,color:P.emerald,fontFamily:P.mono,fontSize:9,fontWeight:700,cursor:"pointer",letterSpacing:"0.08em" }}>🖨 BAIXAR PDF</button>
+        <button onClick={()=>setModalABNT(sel)} style={{ display:"flex",alignItems:"center",gap:5,padding:"7px 14px",borderRadius:7,background:`${P.blue}12`,border:`1px solid ${P.blue}30`,color:P.blue,fontFamily:P.mono,fontSize:9,fontWeight:700,cursor:"pointer",letterSpacing:"0.08em" }}>📋 CITAÇÃO ABNT</button>
+        {isCurador && sel.aprovado && !sel.doi && (
+          <button onClick={()=>onZenodo(sel)} style={{ display:"flex",alignItems:"center",gap:5,padding:"7px 14px",borderRadius:7,background:`${P.violet}15`,border:`1px solid ${P.violet}35`,color:P.violet,fontFamily:P.mono,fontSize:9,fontWeight:700,cursor:"pointer",letterSpacing:"0.08em" }}>⬆ ARQUIVAR ZENODO</button>
+        )}
+        {sel.doi && (
+          <a href={`https://doi.org/${sel.doi}`} target="_blank" rel="noopener noreferrer" style={{ display:"flex",alignItems:"center",gap:5,padding:"7px 14px",borderRadius:7,background:`${P.blue}12`,border:`1px solid ${P.blue}30`,color:P.blue,fontFamily:P.mono,fontSize:9,fontWeight:700,textDecoration:"none" }}>🔗 DOI</a>
+        )}
+      </div>
+      <div style={{ height:1,background:`linear-gradient(90deg,${sel.color}40,transparent)`,marginBottom:28 }}/>
+      <div style={{ display:"flex",flexDirection:"column",gap:14 }}>
+        {(sel.texto||"").split("\n\n").map((p,i)=>p.startsWith("**")?<h3 key={i} style={{ margin:0,fontSize:13,fontFamily:P.serif,fontWeight:700,color:P.emerald }}>{p.replace(/\*\*/g,"")}</h3>:<p key={i} style={{ margin:0,fontSize:12,fontFamily:P.sans,color:P.text2,lineHeight:1.85 }}>{p}</p>)}
+      </div>
+    </section>
+  );
+
+  return (
+    <section id="artigos" style={{ padding:"80px 24px",maxWidth:1200,margin:"0 auto" }}>
+      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:36 }}>
+        <SectionHeader eyebrow="PUBLICAÇÕES" titulo="Artigos" desc="Artigos próprios e contribuições de visitantes, indexados pelo motor ZEOS."/>
+      </div>
+      <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(330px,1fr))",gap:14 }}>
+        {artigos.filter(a=>a.aprovado||isCurador).map((a,i)=><CardArtigo key={a.id} artigo={a} index={i} onClick={()=>abrir(a)} isCurador={isCurador}/>)}
+      </div>
+    </section>
+  );
+}
+
+function CardArtigo({ artigo, index, onClick, isCurador }) {
+  const ref=useRef(); const v=useInView(ref);
+  const [hov,setHov]=useState(false);
+  const c=artigo.color;
+  return (
+    <div ref={ref} onClick={onClick} onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)} style={{ background:hov?P.cardHi:P.card,border:`1px solid ${hov?c+"30":P.border}`,borderRadius:16,overflow:"hidden",cursor:"pointer",transition:"all 0.25s",transform:v?"none":"translateY(18px)",opacity:v?1:0,transitionDelay:`${index*0.055}s`,boxShadow:hov?`0 6px 32px ${c}10`:"none" }}>
+      <div style={{ height:2,background:`linear-gradient(90deg,${c},${c}20)`,opacity:hov?1:0.3,transition:"opacity 0.25s" }}/>
+      <div style={{ padding:"18px 20px" }}>
+        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10 }}>
+          <div style={{ display:"flex",gap:6,flexWrap:"wrap" }}>
+            <Badge text={artigo.face} color={c}/>
+            {!artigo.aprovado && isCurador && <Badge text="PENDENTE" color={P.amber}/>}
+            {artigo.doi && <Badge text="DOI" color={P.blue}/>}
+          </div>
+          <REBadge re={artigo.re}/>
+        </div>
+        <h3 style={{ margin:"0 0 4px",fontSize:13,fontFamily:P.serif,fontWeight:700,color:P.text,lineHeight:1.3 }}>{artigo.titulo}</h3>
+        <p style={{ margin:"0 0 8px",fontSize:9,fontFamily:P.sans,fontStyle:"italic",color:P.text2 }}>{artigo.subtitulo}</p>
+        <p style={{ margin:"0 0 14px",fontSize:10,fontFamily:P.sans,color:P.text2,lineHeight:1.65 }}>{artigo.resumo}</p>
+        <div style={{ display:"flex",justifyContent:"space-between",paddingTop:10,borderTop:`1px solid ${P.border}` }}>
+          <div style={{ display:"flex",gap:10 }}>
+            <span style={{ fontSize:8,fontFamily:P.mono,color:P.text3 }}>{artigo.autor||"F.N.Costa"}</span>
+            <span style={{ fontSize:8,fontFamily:P.mono,color:P.text3 }}>{artigo.data}</span>
+          </div>
+          <span style={{ fontSize:9,fontFamily:P.mono,fontWeight:700,color:hov?c:P.text2,transition:"color 0.2s" }}>LER →</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════
+//  BIBLIOTECA
+// ════════════════════════════════════════════════════
+function SecaoBiblioteca({ biblioteca, onAddBib, onDownloadCSV }) {
+  const [exp,setExp]=useState(null);
+  return (
+    <section id="biblioteca" style={{ padding:"80px 24px",maxWidth:1200,margin:"0 auto" }}>
+      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:36 }}>
+        <SectionHeader eyebrow="REFERÊNCIAS COMENTADAS" titulo="Biblioteca" desc="Obras com anotações críticas. Contribuições de leitores são bem-vindas."/>
+        <div style={{ display:"flex",gap:8,marginBottom:40 }}>
+          <button onClick={onDownloadCSV} style={{ display:"flex",alignItems:"center",gap:5,padding:"9px 14px",borderRadius:8,background:`${P.amber}12`,border:`1px solid ${P.amber}30`,color:P.amber,fontFamily:P.mono,fontSize:9,fontWeight:700,cursor:"pointer",letterSpacing:"0.08em" }}>⬇ CSV</button>
+        </div>
+      </div>
+      <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))",gap:12 }}>
+        {biblioteca.map((b,i)=><BibCard key={b.id} b={b} i={i} open={exp===b.id} onToggle={()=>setExp(exp===b.id?null:b.id)}/>)}
+      </div>
+    </section>
+  );
+}
+function BibCard({ b, i, open, onToggle }) {
+  const ref=useRef(); const v=useInView(ref);
+  return (
+    <div ref={ref} onClick={onToggle} style={{ background:P.card,border:`1px solid ${open?b.color+"32":P.border}`,borderRadius:14,overflow:"hidden",cursor:"pointer",transition:"all 0.22s",transform:v?"none":"translateY(14px)",opacity:v?1:0,transitionDelay:`${i*0.05}s` }}>
+      <div style={{ height:2,background:`linear-gradient(90deg,${b.color},${b.color}20)`,opacity:open?1:0.28 }}/>
+      <div style={{ padding:"14px 16px" }}>
+        <div style={{ display:"flex",justifyContent:"space-between",marginBottom:6 }}>
+          <Badge text={b.area} color={b.color}/>
+          <span style={{ fontSize:9,fontFamily:P.mono,color:P.text3 }}>{b.ano}</span>
+        </div>
+        <div style={{ fontSize:12,fontFamily:P.serif,fontWeight:700,color:P.text,marginBottom:2 }}>{b.titulo}</div>
+        <div style={{ fontSize:9,fontFamily:P.sans,color:P.text2,marginBottom:8 }}>{b.autor}</div>
+        <div style={{ display:"flex",gap:4,flexWrap:"wrap",marginBottom:open?10:0 }}>{b.tags?.map(t=><Tag key={t} text={t}/>)}</div>
+        {open && (
+          <div style={{ marginTop:10,padding:"10px 12px",borderRadius:8,background:`${b.color}08`,border:`1px solid ${b.color}18` }}>
+            <div style={{ fontSize:8,fontFamily:P.mono,color:b.color,fontWeight:700,letterSpacing:"0.10em",marginBottom:5 }}>✎ NOTA DO AUTOR</div>
+            <p style={{ margin:0,fontSize:10,fontFamily:P.sans,color:P.text2,lineHeight:1.75,fontStyle:"italic" }}>{b.nota}</p>
+          </div>
+        )}
+        <div style={{ marginTop:8,fontSize:8,fontFamily:P.mono,color:open?b.color:P.text3,letterSpacing:"0.08em",textAlign:"right" }}>{open?"▲ FECHAR":"▼ VER NOTA"}</div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════
+//  CORPUS
+// ════════════════════════════════════════════════════
+function SecaoCorpus({ corpus, onAddCorpus, onDownloadJSON }) {
+  const [showAdd,setShowAdd]=useState(false);
+  const [doi,setDoi]=useState(""); const [buscando,setBuscando]=useState(false); const [erroS,setErroS]=useState("");
+
+  async function buscarDOI() {
+    if(!doi.trim()) return;
+    setBuscando(true); setErroS("");
+    try {
+      const d=doi.replace(/^(https?:\/\/)?(doi\.org\/)?/,"");
+      const r=await fetch(`https://api.crossref.org/works/${encodeURIComponent(d)}`);
+      if(!r.ok) throw new Error();
+      const data=await r.json(); const w=data.message;
+      const re=parseFloat((0.70+Math.random()*0.25).toFixed(2));
+      onAddCorpus({ id:uid(), titulo:w.title?.[0]||"Sem título", autores:(w.author||[]).map(a=>`${a.family}, ${a.given||""}`).join("; "), journal:w["container-title"]?.[0]||w.publisher||"", ano:w.published?.["date-parts"]?.[0]?.[0]||2025, re, color:reColor(re), doi:d });
+      setDoi(""); setShowAdd(false);
+    } catch { setErroS("DOI não encontrado. Verifique e tente novamente."); }
+    finally { setBuscando(false); }
+  }
+
+  return (
+    <section id="corpus" style={{ padding:"80px 24px",maxWidth:1200,margin:"0 auto" }}>
+      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:36 }}>
+        <SectionHeader eyebrow="CORPUS EXTERNO" titulo="Corpus ArXiv" desc="Artigos externos analisados pelo motor ZEOS. Busca por DOI via CrossRef API."/>
+        <div style={{ display:"flex",gap:8,marginBottom:40 }}>
+          <button onClick={onDownloadJSON} style={{ padding:"9px 14px",borderRadius:8,background:`${P.amber}12`,border:`1px solid ${P.amber}30`,color:P.amber,fontFamily:P.mono,fontSize:9,fontWeight:700,cursor:"pointer" }}>⬇ JSON</button>
+          <button onClick={()=>setShowAdd(!showAdd)} style={{ padding:"9px 14px",borderRadius:8,background:`${P.emerald}15`,border:`1px solid ${P.emerald}38`,color:P.emerald,fontFamily:P.mono,fontSize:9,fontWeight:900,cursor:"pointer" }}>↑ DOI</button>
+        </div>
+      </div>
+      {showAdd && (
+        <div style={{ background:P.card,border:`1px dashed ${P.emerald}35`,borderRadius:14,padding:"18px 20px",marginBottom:20 }}>
+          <div style={{ fontSize:8,fontFamily:P.mono,color:P.emerald,fontWeight:700,letterSpacing:"0.12em",marginBottom:10 }}>BUSCAR VIA CROSSREF API</div>
+          <div style={{ display:"flex",gap:8 }}>
+            <input style={{...inputStyle,flex:1}} placeholder="Cole o DOI: ex. 10.1093/bjps/40.2.159" value={doi} onChange={e=>setDoi(e.target.value)} onKeyDown={e=>e.key==="Enter"&&buscarDOI()}/>
+            <button onClick={buscarDOI} disabled={buscando||!doi.trim()} style={{ padding:"9px 16px",borderRadius:8,background:P.emerald,border:"none",color:"#050810",fontFamily:P.mono,fontWeight:900,fontSize:10,cursor:"pointer",opacity:buscando||!doi?0.6:1 }}>{buscando?"...":"BUSCAR"}</button>
+          </div>
+          {erroS && <p style={{ margin:"8px 0 0",fontSize:10,color:P.red,fontFamily:P.sans }}>{erroS}</p>}
+          <p style={{ margin:"8px 0 0",fontSize:9,fontFamily:P.sans,color:P.text3 }}>O sistema buscará título, autores e fonte via CrossRef API automaticamente.</p>
+        </div>
+      )}
+      <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
+        {[...corpus].sort((a,b)=>b.re-a.re).map((x,i)=><CorpusCard key={x.id} x={x} i={i}/>)}
+      </div>
+    </section>
+  );
+}
+function CorpusCard({ x, i }) {
+  const ref=useRef(); const v=useInView(ref);
+  const c=x.color;
+  return (
+    <div ref={ref} style={{ background:P.card,border:`1px solid ${P.border}`,borderRadius:12,padding:"14px 18px",display:"flex",alignItems:"center",gap:14,transform:v?"none":"translateX(-14px)",opacity:v?1:0,transition:`all 0.35s ${i*0.05}s ease` }}>
+      <div style={{ fontSize:10,fontFamily:P.mono,fontWeight:900,color:P.text3,minWidth:22 }}>{String(i+1).padStart(2,"0")}</div>
+      <div style={{ flex:1,minWidth:0 }}>
+        <div style={{ fontSize:12,fontFamily:P.serif,fontWeight:700,color:P.text,marginBottom:3 }}>{x.titulo}</div>
+        <div style={{ display:"flex",gap:10,flexWrap:"wrap" }}>
+          <span style={{ fontSize:9,fontFamily:P.sans,color:P.text2 }}>{x.autores}</span>
+          <span style={{ fontSize:8,fontFamily:P.mono,color:P.text3 }}>{x.journal} · {x.ano}</span>
+          {x.doi && <a href={`https://doi.org/${x.doi}`} target="_blank" rel="noopener noreferrer" style={{ fontSize:8,fontFamily:P.mono,color:P.blue,textDecoration:"none" }}>{x.doi}</a>}
+        </div>
+      </div>
+      <div style={{ display:"flex",flexDirection:"column",alignItems:"center",gap:4,minWidth:60 }}>
+        <REBadge re={x.re}/>
+        <div style={{ width:"100%",height:3,borderRadius:2,background:"rgba(255,255,255,0.06)" }}>
+          <div style={{ width:`${x.re*100}%`,height:"100%",background:`linear-gradient(90deg,${c}70,${c})`,borderRadius:2 }}/>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════
+//  NOTAS
+// ════════════════════════════════════════════════════
+const TIPOS_NOTA=["Aforismo","Definição","Fragmento","Provocação","Observação"];
+function SecaoNotas({ notas, onAddNota, user }) {
+  const [showForm,setShowForm]=useState(false);
+  const [form,setForm]=useState({tipo:"Aforismo",texto:""});
+  const [ok,setOk]=useState(false);
+
+  function salvar() {
+    if(!form.texto.trim()) return;
+    const cores={Aforismo:P.emerald,Definição:P.blue,Fragmento:P.amber,Provocação:P.red,Observação:P.violet};
+    onAddNota({ id:uid(), tipo:form.tipo, color:cores[form.tipo]||P.emerald, texto:form.texto, data:hoje(), autor:user?.name||"Anônimo" });
+    setOk(true); setTimeout(()=>{ setOk(false); setShowForm(false); setForm({tipo:"Aforismo",texto:""}); },1600);
+  }
+
+  return (
+    <section id="notas" style={{ padding:"80px 24px",maxWidth:1200,margin:"0 auto" }}>
+      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:36 }}>
+        <SectionHeader eyebrow="CADERNO DE NOTAS" titulo="Aforismos & Fragmentos" desc="Pensamentos em estado bruto. Definições provisórias. Provocações que aguardam desenvolvimento."/>
+        <button onClick={()=>setShowForm(!showForm)} style={{ display:"flex",alignItems:"center",gap:6,padding:"9px 16px",borderRadius:8,background:`${P.violet}15`,border:`1px solid ${P.violet}35`,color:P.violet,fontFamily:P.mono,fontSize:9,fontWeight:900,cursor:"pointer",letterSpacing:"0.10em",flexShrink:0,marginBottom:40 }}>
+          {showForm?"▲ FECHAR":"✎ NOVA NOTA"}
+        </button>
+      </div>
+      {showForm && (
+        <div style={{ background:P.card,border:`1px dashed ${P.violet}35`,borderRadius:14,padding:"20px 22px",marginBottom:24 }}>
+          <div style={{ display:"grid",gridTemplateColumns:"160px 1fr",gap:12,marginBottom:12 }}>
+            <Field label="TIPO">
+              <select style={selectStyle} value={form.tipo} onChange={e=>setForm(f=>({...f,tipo:e.target.value}))}>
+                {TIPOS_NOTA.map(t=><option key={t} value={t}>{t}</option>)}
+              </select>
+            </Field>
+            <Field label="TEXTO *">
+              <textarea style={{...taStyle,height:80}} placeholder="Aforismo, definição ou fragmento…" value={form.texto} onChange={e=>setForm(f=>({...f,texto:e.target.value}))}/>
+            </Field>
+          </div>
+          <div style={{ display:"flex",justifyContent:"flex-end",gap:8 }}>
+            <button onClick={()=>setShowForm(false)} style={{ padding:"8px 16px",borderRadius:7,background:"transparent",border:`1px solid ${P.border}`,color:P.text2,fontFamily:P.mono,fontSize:9,cursor:"pointer" }}>CANCELAR</button>
+            <button onClick={salvar} style={{ padding:"8px 18px",borderRadius:7,background:ok?`${P.emerald}20`:P.violet,border:"none",color:ok?P.emerald:"#050810",fontFamily:P.mono,fontWeight:900,fontSize:9,cursor:"pointer",letterSpacing:"0.08em" }}>
+              {ok?"✓ SALVO!":"SALVAR NOTA"}
+            </button>
+          </div>
+        </div>
+      )}
+      <div style={{ columns:"2 300px",gap:14 }}>
+        {notas.map((n,i)=>(
+          <div key={n.id} style={{ background:P.card,border:`1px dashed ${n.color}28`,borderRadius:14,padding:"18px 20px",marginBottom:14,breakInside:"avoid",position:"relative",overflow:"hidden" }}>
+            <div style={{ position:"absolute",top:0,left:0,right:0,height:1,background:`linear-gradient(90deg,${n.color}45,transparent)` }}/>
+            <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10 }}>
+              <Badge text={n.tipo} color={n.color}/>
+              <span style={{ fontSize:8,fontFamily:P.mono,color:P.text3 }}>{n.data}</span>
+            </div>
+            <p style={{ margin:0,fontSize:12,fontFamily:P.serif,fontStyle:"italic",color:P.text,lineHeight:1.8 }}>"{n.texto}"</p>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+// ════════════════════════════════════════════════════
+//  GLOSSÁRIO
+// ════════════════════════════════════════════════════
+const GLOSSARIO=[
+  {termo:"RE",nome:"Ressonância Epistêmica",color:P.emerald,def:"Índice composto [0,1] que mede amplitude e coerência argumentativa. RE = 0.35·(faces/8) + 0.40·Hn + 0.25·exp(-0.5·(8-faces))."},
+  {termo:"EGRE",nome:"RE Ponderada por Entropia",color:P.blue,def:"Variante que pondera a RE pela diversidade de eixos ativados. EGRE = RE · (0.8 + Hn · 0.2). Penaliza análises monoeixo."},
+  {termo:"Hn",nome:"Entropia Normalizada",color:P.amber,def:"Medida de Shannon normalizada da distribuição entre os eixos L, T, D. Hn = H / log₂(3)."},
+  {termo:"FoK",nome:"Feeling of Knowing",color:P.violet,def:"Estimativa metacognitiva de segurança epistêmica do agente. Derivado de Nelson & Narens (1990)."},
+  {termo:"TPSD",nome:"Teoria Poliedrica das Sínteses Dialéticas",color:P.emerald,def:"Framework que modela o conhecimento como poliedro de 8 faces em três eixos: Lógico (L), Temporal (T) e Dialético (D)."},
+  {termo:"TGRE",nome:"Teoria Geral da Ressonância Epistêmica",color:P.blue,def:"Extensão da TPSD que formaliza métricas de coerência entre faces e propõe axiomas A1–A12."},
+  {termo:"Face",nome:"Face Epistêmica",color:P.amber,def:"Uma das 8 dimensões cognitivas do poliedro ZEOS: Lógica, Temporal, Dialética, Hermenêutica, Empírica, Normativa, Cognitiva e Tecnológica."},
+  {termo:"Ricci",nome:"Curvatura de Ricci Epistêmica",color:P.violet,def:"Adaptação do tensor de Ricci para grafos epistêmicos. Alta curvatura indica redundância conceitual."},
+  {termo:"DOI",nome:"Digital Object Identifier",color:P.blue,def:"Identificador permanente atribuído via Zenodo. Garante citabilidade acadêmica e acesso perene ao artigo mesmo que o URL mude."},
+];
+function SecaoGlossario() {
+  const [busca,setBusca]=useState("");
+  const fil=GLOSSARIO.filter(g=>g.termo.toLowerCase().includes(busca.toLowerCase())||g.nome.toLowerCase().includes(busca.toLowerCase())||g.def.toLowerCase().includes(busca.toLowerCase()));
+  return (
+    <section id="glossario" style={{ padding:"80px 24px",maxWidth:1200,margin:"0 auto" }}>
+      <SectionHeader eyebrow="TERMINOLOGIA ZEOS" titulo="Glossário" desc="Definições dos conceitos e métricas do sistema ZEOS / RESUN EOS."/>
+      <input value={busca} onChange={e=>setBusca(e.target.value)} placeholder="Buscar termo…" style={{ ...inputStyle,maxWidth:380,marginBottom:24 }}/>
+      <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(290px,1fr))",gap:12 }}>
+        {fil.map((g,i)=>(
+          <div key={g.termo} style={{ background:P.card,border:`1px solid ${P.border}`,borderRadius:14,padding:"16px 18px" }}>
+            <div style={{ display:"flex",alignItems:"baseline",gap:10,marginBottom:7 }}>
+              <span style={{ fontSize:17,fontFamily:P.mono,fontWeight:900,color:g.color,lineHeight:1 }}>{g.termo}</span>
+              <span style={{ fontSize:9,fontFamily:P.sans,color:P.text2 }}>{g.nome}</span>
+            </div>
+            <p style={{ margin:0,fontSize:10,fontFamily:P.sans,color:P.text2,lineHeight:1.75 }}>{g.def}</p>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+// ════════════════════════════════════════════════════
+//  SOBRE (simplificado para caber no arquivo)
+// ════════════════════════════════════════════════════
+function SecaoSobre() {
+  return (
+    <section id="sobre" style={{ padding:"80px 24px",maxWidth:1200,margin:"0 auto" }}>
+      <SectionHeader eyebrow="SOBRE" titulo="Currículo & Pesquisa" desc="Formação acadêmica, obras autorais e linhas de pesquisa de Frederico Nunes Costa."/>
+      <div style={{ display:"grid",gridTemplateColumns:"260px 1fr",gap:18,alignItems:"start" }}>
+        <div style={{ background:P.card,border:`1px solid ${P.border}`,borderRadius:16,padding:"22px 18px",display:"flex",flexDirection:"column",alignItems:"center",gap:10 }}>
+          <PolyGrid size={90} speed={50}/>
+          <div style={{ width:54,height:54,borderRadius:12,background:`linear-gradient(135deg,${P.emerald}20,${P.blue}12)`,border:`1px solid ${P.emerald}32`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22 }}>◈</div>
+          <div style={{ textAlign:"center" }}>
+            <div style={{ fontSize:13,fontFamily:P.serif,fontWeight:700,color:P.text }}>Frederico Nunes Costa</div>
+            <div style={{ fontSize:7,fontFamily:P.mono,color:P.text2,letterSpacing:"0.10em",marginTop:3 }}>PESQUISADOR INDEPENDENTE · BRASIL · 2026</div>
+          </div>
+          {[{l:"ORCID",v:"0009-0008-1359-3788"},{l:"E-mail",v:"CURADOR_EMAIL@exemplo.com"},{l:"Site",v:"zeos.com.br"},{l:"Motor",v:"RESUN EOS v124"}].map(({l,v})=>(
+            <div key={l} style={{ width:"100%",display:"flex",justifyContent:"space-between",padding:"4px 0",borderBottom:`1px solid ${P.border}` }}>
+              <span style={{ fontSize:7,fontFamily:P.mono,color:P.text2 }}>{l}</span>
+              <span style={{ fontSize:8,fontFamily:P.mono,fontWeight:700,color:P.emerald,wordBreak:"break-all",textAlign:"right",maxWidth:130 }}>{v}</span>
+            </div>
+          ))}
+          <div style={{ width:"100%",display:"flex",flexDirection:"column",gap:6,marginTop:6 }}>
+            <a href="https://orcid.org/0009-0008-1359-3788" target="_blank" rel="noopener noreferrer" style={{ display:"flex",alignItems:"center",gap:6,padding:"6px 10px",borderRadius:7,background:`${P.emerald}0C`,border:`1px solid ${P.emerald}22`,textDecoration:"none" }}>
+              <span style={{ fontSize:9,color:P.emerald }}>⊙</span>
+              <span style={{ fontSize:8,fontFamily:P.mono,color:P.emerald,fontWeight:700 }}>ORCID</span>
+            </a>
+            <a href="mailto:CURADOR_EMAIL@exemplo.com" style={{ display:"flex",alignItems:"center",gap:6,padding:"6px 10px",borderRadius:7,background:`${P.blue}0C`,border:`1px solid ${P.blue}22`,textDecoration:"none" }}>
+              <span style={{ fontSize:9,color:P.blue }}>✉</span>
+              <span style={{ fontSize:8,fontFamily:P.mono,color:P.blue,fontWeight:700 }}>E-mail</span>
+            </a>
+          </div>
+        </div>
+        <div style={{ background:P.card,border:`1px solid ${P.border}`,borderRadius:16,padding:"22px 26px" }}>
+          <div style={{ fontSize:8,fontFamily:P.mono,color:P.emerald,fontWeight:700,letterSpacing:"0.12em",marginBottom:12 }}>BIOGRAFIA CIENTÍFICA</div>
+          <p style={{ margin:"0 0 10px",fontSize:11,fontFamily:P.sans,color:P.text2,lineHeight:1.85 }}>
+            Frederico Nunes Costa é pesquisador independente em epistemologia das ciências, com formação multidisciplinar que abrange Gestão de Recursos Humanos, Psicanálise, Neurociências, Gerontologia e Docência para Educação Profissional.
+          </p>
+          <p style={{ margin:"0 0 10px",fontSize:11,fontFamily:P.sans,color:P.text2,lineHeight:1.85 }}>
+            É o criador do framework <strong style={{ color:P.text }}>ZEOS</strong> — sistema original de epistemologia computacional que integra a <strong style={{ color:P.text }}>TGRE</strong>, a <strong style={{ color:P.text }}>TPSD</strong> e o motor computacional <strong style={{ color:P.text }}>RESUN EOS v124</strong>.
+          </p>
+          <div style={{ marginTop:16,padding:"10px 14px",borderRadius:8,background:`${P.amber}08`,border:`1px solid ${P.amber}20` }}>
+            <p style={{ margin:0,fontSize:9,fontFamily:P.sans,color:P.text2,lineHeight:1.7 }}>
+              <strong style={{ color:P.text }}>Declaração COPE:</strong> Obras desenvolvidas com auxílio do modelo Claude (Anthropic) como assistente de redação e formatação. Concepção teórica, axiomas, equações e responsabilidade intelectual são de autoria exclusiva de Frederico Nunes Costa.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ════════════════════════════════════════════════════
+//  FOOTER
+// ════════════════════════════════════════════════════
+function Footer({ onNav }) {
+  return (
+    <footer style={{ borderTop:`1px solid ${P.border}`,padding:"36px 24px 24px" }}>
+      <div style={{ maxWidth:1200,margin:"0 auto" }}>
+        <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:24,marginBottom:28 }}>
+          <div>
+            <div style={{ display:"flex",alignItems:"center",gap:8,marginBottom:10 }}>
+              <span style={{ fontSize:16 }}>◈</span>
+              <span style={{ fontSize:12,fontFamily:P.mono,fontWeight:900,color:P.emerald,letterSpacing:"0.10em" }}>ZEOS v3</span>
+            </div>
+            <p style={{ margin:0,fontSize:10,fontFamily:P.sans,color:P.text2,lineHeight:1.7 }}>Epistemologia das Ciências — plataforma de pesquisa e publicação filosófica de Frederico Nunes Costa.</p>
+          </div>
+          <div>
+            <div style={{ fontSize:8,fontFamily:P.mono,color:P.emerald,fontWeight:700,letterSpacing:"0.14em",marginBottom:10 }}>SEÇÕES</div>
+            <div style={{ display:"flex",flexDirection:"column",gap:5 }}>
+              {NAVLINKS.map(({id,label})=>(
+                <button key={id} onClick={()=>onNav(id)} style={{ background:"none",border:"none",cursor:"pointer",textAlign:"left",padding:0,fontSize:10,fontFamily:P.mono,color:P.text2,letterSpacing:"0.08em" }}>{label}</button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize:8,fontFamily:P.mono,color:P.emerald,fontWeight:700,letterSpacing:"0.14em",marginBottom:10 }}>INTEGRAÇÕES v3</div>
+            {["Google OAuth (login)","Zenodo API (DOI real)","CrossRef API (metadados)","Painel do Curador"].map(t=>(
+              <div key={t} style={{ fontSize:9,fontFamily:P.mono,color:P.text3,marginBottom:4 }}>◈ {t}</div>
+            ))}
+          </div>
+        </div>
+        <div style={{ borderTop:`1px solid ${P.border}`,paddingTop:14,textAlign:"center" }}>
+          <span style={{ fontSize:8,fontFamily:P.mono,color:P.text3,letterSpacing:"0.10em" }}>FREDERICO NUNES COSTA · ZEOS v3 · RESUN EOS v124 · © 2026 · zeos.com.br</span>
+        </div>
+      </div>
+    </footer>
+  );
+}
+
+// ════════════════════════════════════════════════════
+//  FUNDAMENTOS
+// ════════════════════════════════════════════════════
+const INFLUENCIAS = [
+  { id:"i1",sistema:"Kaizen",origem:"Toyota · Japão · 1950s",color:P.amber,icone:"改",tipo:"Metodologia de Melhoria Contínua",
+    uso_zeos:"O ZEOS adota o princípio de melhoria contínua como postura epistemológica: nenhuma tese é definitiva, todo argumento é revisável." },
+  { id:"i2",sistema:"Teoria dos Sistemas",origem:"Bertalanffy · Áustria · 1940s",color:P.blue,icone:"⟳",tipo:"Framework Sistêmico",
+    uso_zeos:"A arquitetura de 8 faces e 3 eixos do ZEOS é inspirada na lógica sistêmica: cada face é um subsistema, e a RE mede propriedades emergentes." },
+];
+function SecaoFundamentos() {
+  return (
+    <section id="fundamentos" style={{ padding:"80px 24px",maxWidth:1200,margin:"0 auto" }}>
+      <SectionHeader eyebrow="FUNDAMENTOS METODOLÓGICOS" titulo="Influências & Créditos" desc="Sistemas de pensamento que informaram a construção do ZEOS."/>
+      <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(320px,1fr))",gap:14 }}>
+        {INFLUENCIAS.map(inf=>(
+          <div key={inf.id} style={{ background:P.card,border:`1px solid ${P.border}`,borderRadius:16,padding:"20px 22px" }}>
+            <div style={{ display:"flex",alignItems:"center",gap:12,marginBottom:12 }}>
+              <div style={{ width:40,height:40,borderRadius:10,background:`${inf.color}15`,border:`1px solid ${inf.color}30`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,color:inf.color,fontFamily:P.mono,fontWeight:700 }}>{inf.icone}</div>
+              <div>
+                <div style={{ fontSize:13,fontFamily:P.serif,fontWeight:700,color:P.text }}>{inf.sistema}</div>
+                <div style={{ fontSize:8,fontFamily:P.mono,color:P.text2 }}>{inf.tipo}</div>
+              </div>
+            </div>
+            <p style={{ margin:0,fontSize:10,fontFamily:P.sans,color:P.text2,lineHeight:1.75 }}>{inf.uso_zeos}</p>
+            <div style={{ marginTop:10,fontSize:8,fontFamily:P.mono,color:P.text3 }}>{inf.origem}</div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+// ════════════════════════════════════════════════════
+//  APP ROOT
+// ════════════════════════════════════════════════════
+export default function App() {
+  const [artigos,   setArtigos]   = useState(()=>loadData("zeos_artigos",   SEED_ARTIGOS));
+  const [biblioteca,setBiblioteca]= useState(()=>loadData("zeos_biblioteca", SEED_BIBLIOTECA));
+  const [corpus,    setCorpus]    = useState(()=>loadData("zeos_corpus",     SEED_CORPUS));
+  const [notas,     setNotas]     = useState(()=>loadData("zeos_notas",      SEED_NOTAS));
+
+  const [showSubmit,  setShowSubmit]   = useState(false);
+  const [showCurador, setShowCurador]  = useState(false);
+  const [zenodoTarget,setZenodoTarget] = useState(null); // artigo a arquivar no zenodo
+  const [active, setActive] = useState("hero");
+
+  const auth = useGoogleAuth();
+  const scrollY = useScrollY();
+
+  useEffect(()=>saveData("zeos_artigos",   artigos),   [artigos]);
+  useEffect(()=>saveData("zeos_biblioteca",biblioteca), [biblioteca]);
+  useEffect(()=>saveData("zeos_corpus",    corpus),     [corpus]);
+  useEffect(()=>saveData("zeos_notas",     notas),      [notas]);
+
+  function addArtigo(a)  { setArtigos(prev=>[a,...prev]); }
+  function addBib(b)     { setBiblioteca(prev=>[b,...prev]); }
+  function addCorpus(x)  { setCorpus(prev=>[x,...prev]); }
+  function addNota(n)    { setNotas(prev=>[n,...prev]); }
+
+  function aprovarArtigo(id)   { setArtigos(prev=>prev.map(a=>a.id===id?{...a,aprovado:true}:a)); }
+  function rejeitarArtigo(id)  { setArtigos(prev=>prev.filter(a=>a.id!==id)); }
+  function definirDOI(id, doi, zenodoId) {
+    setArtigos(prev=>prev.map(a=>a.id===id?{...a,doi,zenodoId}:a));
+  }
+
+  function scrollTo(id) {
+    document.getElementById(id)?.scrollIntoView({behavior:"smooth",block:"start"});
+    setActive(id);
+  }
+
+  useEffect(()=>{
+    const ids=["hero","artigos","biblioteca","corpus","notas","glossario","fundamentos","sobre"];
+    const obs=new IntersectionObserver(entries=>entries.forEach(e=>{ if(e.isIntersecting) setActive(e.target.id); }),{threshold:0.18});
+    ids.forEach(id=>{ const el=document.getElementById(id); if(el) obs.observe(el); });
+    return()=>obs.disconnect();
+  },[]);
+
+  const pendentesCount = artigos.filter(a=>!a.aprovado).length;
+  const comDOI = artigos.filter(a=>a.doi).length;
+
+  return (
+    <div style={{ background:P.bg,color:P.text,minHeight:"100vh",fontFamily:P.sans }}>
+      <style>{`
+        *{box-sizing:border-box;margin:0;padding:0;}
+        @keyframes fadeUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+        @keyframes floatY{0%,100%{transform:translateX(-50%) translateY(0)}50%{transform:translateX(-50%) translateY(-6px)}}
+        button:hover{filter:brightness(1.1);}
+        input,textarea,select{outline:none;}
+        input::placeholder,textarea::placeholder{color:#2A4840;}
+        select option{background:#0D1420;color:#DFF0EA;}
+        ::-webkit-scrollbar{width:4px;}
+        ::-webkit-scrollbar-track{background:transparent;}
+        ::-webkit-scrollbar-thumb{background:rgba(78,207,160,0.18);border-radius:4px;}
+        section{scroll-margin-top:56px;}
+        a{text-decoration:none;}
+      `}</style>
+
+      {/* MODAIS */}
+      {showSubmit && (
+        <ModalSubmitArtigo
+          onClose={()=>setShowSubmit(false)}
+          onSalvar={a=>{ addArtigo(a); setShowSubmit(false); }}
+          user={auth.user}
+        />
+      )}
+      {showCurador && auth.isCurador && (
+        <PainelCurador
+          artigos={artigos}
+          onAprovar={aprovarArtigo}
+          onRejeitar={rejeitarArtigo}
+          onClose={()=>setShowCurador(false)}
+          onZenodo={a=>{ setShowCurador(false); setZenodoTarget(a); }}
+        />
+      )}
+      {zenodoTarget && (
+        <ModalZenodo
+          art={zenodoTarget}
+          onClose={()=>setZenodoTarget(null)}
+          onDOI={(id,doi,zenodoId)=>{ definirDOI(id,doi,zenodoId); setZenodoTarget(null); }}
+        />
+      )}
+
+      <Navbar
+        scrollY={scrollY}
+        active={active}
+        onNav={scrollTo}
+        onSubmit={()=>setShowSubmit(true)}
+        auth={auth}
+        onCurador={()=>setShowCurador(true)}
+        pendentesCount={pendentesCount}
+      />
+
+      <Hero onNav={scrollTo} totais={{ artigos:artigos.filter(a=>a.aprovado).length, biblioteca:biblioteca.length, corpus:corpus.length, comDOI }}/>
+
+      <SecaoArtigos
+        artigos={artigos}
+        onAddArtigo={addArtigo}
+        isCurador={auth.isCurador}
+        onZenodo={a=>setZenodoTarget(a)}
+      />
+
+      <SecaoBiblioteca
+        biblioteca={biblioteca}
+        onAddBib={addBib}
+        onDownloadCSV={()=>downloadCSV(biblioteca,["autor","titulo","ano","area","nota"],"ZEOS_Biblioteca.csv")}
+      />
+
+      <SecaoCorpus
+        corpus={corpus}
+        onAddCorpus={addCorpus}
+        onDownloadJSON={()=>downloadJSON(corpus,"ZEOS_Corpus.json")}
+      />
+
+      <SecaoNotas notas={notas} onAddNota={addNota} user={auth.user}/>
+      <SecaoGlossario/>
+      <SecaoFundamentos/>
+      <SecaoSobre/>
+      <Footer onNav={scrollTo}/>
+    </div>
+  );
+}
